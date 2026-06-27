@@ -626,19 +626,20 @@ function docsPage(contact) {
       <tr><td><code>fields</code></td><td>csv list</td><td><i>preset</i></td><td>columns for csv/json projection (see below)</td></tr>
     </tbody>
   </table>
-  <p>Example: <code>/risk-ip?days=30&amp;source=ssh&amp;limit=100</code></p>
+  <p>Example request: <code>/risk-ip?days=30&amp;source=ssh&amp;limit=100</code></p>
+  <p>Example response <span style="color:#64748b">— illustrative placeholder values, not live data</span>:</p>
   <pre>{
-  "generated": "2026-06-27T08:00:00.000Z",
-  "days": 7, "source": null, "count": 4017, "limit": 20000, "offset": 0,
-  "stats": { "unique_ips": 2585, "total_attempts": 426751, "high": 297, "countries": 89 },
-  "countries": [ { "country_code": "US", "country": "United States", "attempts": 151861, "ips": 497 } ],
+  "generated": "&lt;ISO-8601 timestamp&gt;",
+  "days": 7, "source": null, "count": 123, "limit": 20000, "offset": 0,
+  "stats": { "unique_ips": 1000, "total_attempts": 50000, "high": 50, "countries": 25 },
+  "countries": [ { "country_code": "XX", "country": "Example", "attempts": 9999, "ips": 100 } ],
   "rows": [
     {
-      "log_date": "2026-06-27", "ip": "203.0.113.10",
-      "attempts": 1432, "sources": "ssh,web", "categories": "ssh_bruteforce,web_env",
-      "nsrc": 2, "reporters": 3, "last_seen": "2026-06-27 04:51:02",
-      "country": "United States", "country_code": "US",
-      "lat": 37.75, "lon": -97.82, "risk": "HIGH", "risk_color": "#dc2626"
+      "log_date": "YYYY-MM-DD", "ip": "203.0.113.10",
+      "attempts": 999, "sources": "ssh,web", "categories": "ssh_bruteforce,web_env",
+      "nsrc": 2, "reporters": 3, "last_seen": "YYYY-MM-DD HH:MM:SS",
+      "country": "Example", "country_code": "XX",
+      "lat": 0.0, "lon": 0.0, "risk": "HIGH", "risk_color": "#dc2626"
     }
   ]
 }</pre>
