@@ -1,0 +1,23 @@
+name = "ip-risk"
+main = "src/index.js"
+compatibility_date = "2026-06-27"
+compatibility_flags = ["nodejs_compat"]
+
+# Account ID: provide via the CLOUDFLARE_ACCOUNT_ID environment variable
+# (do NOT hard-code it here for a public repo).
+
+# Custom domain (optional): point a hostname in YOUR Cloudflare account at the
+# Worker. Leave commented to use the default <name>.<subdomain>.workers.dev URL.
+# routes = [{ pattern = "risk.yourdomain.com", custom_domain = true }]
+
+[observability]
+enabled = true
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+# Your Hyperdrive config id (from `wrangler hyperdrive list`). Not a credential,
+# but specific to your account — replace with your own.
+id = "REPLACE_WITH_YOUR_HYPERDRIVE_ID"
+# For `wrangler dev` only, set the local DB connection string via env var so no
+# credentials are committed:
+#   export WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="mysql://user:pass@host:3306/security"

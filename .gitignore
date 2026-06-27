@@ -1,0 +1,20 @@
+# secrets / local config — NEVER commit
+.env
+.env.local
+.dev.vars
+*.secret
+
+# node / wrangler
+node_modules/
+.wrangler/
+dist/
+
+# python
+__pycache__/
+*.pyc
+
+# logs / editor / os
+*.log
+.DS_Store
+.idea/
+.vscode/
