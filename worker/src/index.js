@@ -46,6 +46,9 @@ const RISK_MAX_LIMIT = 20000;
 // Favicon for the HTML pages (served from R2).
 const FAVICON_URL = "https://r2.ivjn.us/favicon.ico";
 
+// Source repository, linked from the dashboard.
+const GITHUB_URL = "https://github.com/mbcc2006/ip-risk";
+
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
@@ -380,7 +383,7 @@ function shellPage(contact) {
   footer{color:#64748b;margin-top:18px;font-size:12px;line-height:1.7}
   footer a{color:#93c5fd}
 </style></head><body><div class="wrap">
-  <header><h1>🛡️ Daily IP Risk</h1><a class="docs" href="/docs">API docs &amp; IP removal →</a></header>
+  <header><h1>🛡️ Daily IP Risk</h1><a class="docs" href="${GITHUB_URL}" target="_blank" rel="noopener">GitHub ↗</a><a class="docs" href="/docs">API docs &amp; IP removal →</a></header>
 
   <div class="cards" id="cards">
     <div class="card"><div class="k">Unique IPs</div><div class="v" id="c-ips">–</div></div>
@@ -410,6 +413,7 @@ function shellPage(contact) {
     To request removal of an IP from this list, contact <b>${esc(contact.name)}</b>
     &lt;<a href="mailto:${esc(contact.email)}?subject=IP%20removal%20request">${esc(contact.email)}</a>&gt;
     · <a href="/docs">API documentation</a>
+    · <a href="${GITHUB_URL}" target="_blank" rel="noopener">Source on GitHub</a>
   </footer>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
