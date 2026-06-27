@@ -123,14 +123,27 @@ npx wrangler dev
 
 | route | description |
 |-------|-------------|
-| `GET /` | HTML dashboard with risk map |
-| `GET /?format=json\|csv` | data export (`fields=` to pick columns) |
-| `GET /?source=ssh\|mysql\|web` | filter by source |
-| `GET /ip_only` | JSON array of distinct IPs, threat-ranked (`limit` ≤ 5000, `offset`) |
-| `GET /ip_only?format=csv` | one IP per line |
+| `GET /` | HTML dashboard. A static shell that loads its data **asynchronously** from `/risk-ip`; the map plots up to 500 IPs and the table paginates 50 per page. |
+| `GET /risk-ip` | **The data API** — dashboard rows as JSON (default) or CSV. |
+| `GET /ip_only` | distinct attacker IPs, threat-ranked — JSON array or (`format=csv`) one per line. |
+| `GET /docs` | HTML API documentation (linked from the dashboard). |
+| `GET /ping` | debug. |
 
-All query params are validated (allowlists + clamped integers) and every SQL
-value is bound — no string concatenation of user input into SQL.
+Query params (all validated — allowlists + clamped integers, every SQL value bound):
+
+| param | applies to | type / values | default | meaning |
+|-------|-----------|---------------|---------|---------|
+| `days` | `/risk-ip` | int 1–90 | 7 | look-back window |
+| `source` | `/risk-ip`, `/ip_only` | `ssh\|mysql\|web` | all | filter by source (400 if invalid) |
+| `limit` | `/risk-ip`, `/ip_only` | int 1–5000 | 500 / 1000 | page size |
+| `offset` | `/risk-ip`, `/ip_only` | int ≥ 0 | 0 | page offset |
+| `format` | data routes | `json\|csv` | json | response format |
+| `fields` | `/risk-ip` | csv subset | preset | column projection (`log_date,ip,attempts,sources,categories,nsrc,reporters,last_seen,country,country_code,risk`) |
+
+Full reference and examples live at **`/docs`** on the deployed Worker.
+
+**IP removal:** to request an address be removed from the feed, contact
+世界第一好吃 &lt;admin@ivjn.us&gt; (also shown on the dashboard and `/docs`).
 
 ---
 
