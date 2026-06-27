@@ -40,6 +40,9 @@ const DEFAULT_FIELDS = ["log_date", "ip", "attempts", "sources", "categories", "
 const MAP_MAX = 500;   // IPs plotted on the map / fetched for the dashboard
 const PAGE_SIZE = 50;  // table rows per page (client-side pagination)
 
+// Favicon for the HTML pages (served from R2).
+const FAVICON_URL = "https://r2.ivjn.us/favicon.ico";
+
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
@@ -296,6 +299,7 @@ function shellPage(contact) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Daily IP Risk</title>
+<link rel="icon" href="${FAVICON_URL}">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root{color-scheme:dark}
@@ -510,6 +514,7 @@ function docsPage(contact) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>IP Risk — API documentation</title>
+<link rel="icon" href="${FAVICON_URL}">
 <style>
   :root{color-scheme:dark}
   *{box-sizing:border-box}
