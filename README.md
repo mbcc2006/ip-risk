@@ -137,7 +137,7 @@ Query params (all validated — allowlists + clamped integers, every SQL value b
 |-------|-----------|---------------|---------|---------|
 | `days` | `/risk-ip` | int 1–90 | 7 | look-back window |
 | `source` | `/risk-ip`, `/ip_only` | `ssh\|mysql\|web` | all | filter by source (400 if invalid) |
-| `limit` | `/risk-ip`, `/ip_only` | int 1–5000 | 500 / 1000 | page size |
+| `limit` | `/risk-ip`, `/ip_only` | int 1–20000 | 20000 (full window) / 1000 | rows per page; page large windows with `offset` |
 | `offset` | `/risk-ip`, `/ip_only` | int ≥ 0 | 0 | page offset |
 | `format` | data routes | `json\|csv` | json | response format |
 | `fields` | `/risk-ip` | csv subset | preset | column projection (`log_date,ip,attempts,sources,categories,nsrc,reporters,last_seen,country,country_code,risk`) |

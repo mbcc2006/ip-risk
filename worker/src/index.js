@@ -39,6 +39,9 @@ const DEFAULT_FIELDS = ["log_date", "ip", "attempts", "sources", "categories", "
 
 const MAP_MAX = 500;   // IPs plotted on the map / fetched for the dashboard
 const PAGE_SIZE = 50;  // table rows per page (client-side pagination)
+// /risk-ip data API: default returns the whole window (one row per date+IP); for
+// windows larger than this, page through with limit + offset.
+const RISK_MAX_LIMIT = 20000;
 
 // Favicon for the HTML pages (served from R2).
 const FAVICON_URL = "https://r2.ivjn.us/favicon.ico";
@@ -260,7 +263,7 @@ async function handle(request, env) {
   }
 
   if (url.pathname === "/ip_only") {
-    const limit = clampInt(url.searchParams.get("limit"), 1000, 1, 5000);
+    const limit = clampInt(url.searchParams.get("limit"), 1000, 1, RISK_MAX_LIMIT);
     const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1000000000);
     let c;
     try {
@@ -281,7 +284,7 @@ async function handle(request, env) {
   }
 
   if (url.pathname === "/risk-ip") {
-    const limit = clampInt(url.searchParams.get("limit"), MAP_MAX, 1, 5000);
+    const limit = clampInt(url.searchParams.get("limit"), RISK_MAX_LIMIT, 1, RISK_MAX_LIMIT);
     const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1000000000);
     let conn, rows, stats = null;
     try {
@@ -581,13 +584,15 @@ function docsPage(contact) {
 
   <h3><span class="method">GET</span>/risk-ip</h3>
   <p>The main data feed: one row per <code>(report&nbsp;date, IP)</code> in the window,
-  ordered by date then attempts. Default <code>format=json</code>.</p>
+  ordered by date then attempts. Default <code>format=json</code>. By default it returns
+  the <b>whole window</b> (up to ${RISK_MAX_LIMIT.toLocaleString("en-US")} rows); for larger
+  windows, page with <code>limit</code> + <code>offset</code>.</p>
   <table>
     <thead><tr><th>param</th><th>type</th><th>default</th><th>meaning</th></tr></thead>
     <tbody>
       <tr><td><code>days</code></td><td>int 1–90</td><td>7</td><td>look-back window (whole days)</td></tr>
       <tr><td><code>source</code></td><td>ssh \| mysql \| web</td><td><i>all</i></td><td>filter by source (400 if invalid)</td></tr>
-      <tr><td><code>limit</code></td><td>int 1–5000</td><td>${MAP_MAX}</td><td>max rows returned</td></tr>
+      <tr><td><code>limit</code></td><td>int 1–${RISK_MAX_LIMIT}</td><td>${RISK_MAX_LIMIT} (full window)</td><td>rows per page</td></tr>
       <tr><td><code>offset</code></td><td>int ≥0</td><td>0</td><td>skip N rows (for paging)</td></tr>
       <tr><td><code>format</code></td><td>json \| csv</td><td>json</td><td>response format</td></tr>
       <tr><td><code>fields</code></td><td>csv list</td><td><i>preset</i></td><td>columns for csv/json projection (see below)</td></tr>
@@ -596,8 +601,8 @@ function docsPage(contact) {
   <p>Example: <code>/risk-ip?days=30&amp;source=ssh&amp;limit=100</code></p>
   <pre>{
   "generated": "2026-06-27T08:00:00.000Z",
-  "days": 7, "source": null, "count": 500, "limit": 500, "offset": 0,
-  "stats": { "unique_ips": 2987, "total_attempts": 1840221, "high": 612, "countries": 71 },
+  "days": 7, "source": null, "count": 4017, "limit": 20000, "offset": 0,
+  "stats": { "unique_ips": 2585, "total_attempts": 426751, "high": 297, "countries": 89 },
   "rows": [
     {
       "log_date": "2026-06-27", "ip": "203.0.113.10",
@@ -623,7 +628,7 @@ function docsPage(contact) {
     <thead><tr><th>param</th><th>type</th><th>default</th><th>meaning</th></tr></thead>
     <tbody>
       <tr><td><code>source</code></td><td>ssh \| mysql \| web</td><td><i>all</i></td><td>filter by source</td></tr>
-      <tr><td><code>limit</code></td><td>int 1–5000</td><td>1000</td><td>page size</td></tr>
+      <tr><td><code>limit</code></td><td>int 1–${RISK_MAX_LIMIT}</td><td>1000</td><td>page size</td></tr>
       <tr><td><code>offset</code></td><td>int ≥0</td><td>0</td><td>page offset</td></tr>
       <tr><td><code>format</code></td><td>json \| csv</td><td>json</td><td>JSON array, or one IP per line</td></tr>
     </tbody>
