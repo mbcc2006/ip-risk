@@ -212,6 +212,21 @@ def is_public_ip(s):
                 or ip.is_multicast or ip.is_unspecified or ip.is_reserved)
 
 
+def _file_maybe_in_window(path, cutoff):
+    """False if the file's newest possible event is older than cutoff.
+
+    Log files are append-ordered, so a file's mtime is the timestamp of its last
+    line. When mtime < cutoff every event in it predates the window, so the whole
+    (often rotated / .gz) file can be skipped instead of decompressed and scanned.
+    Returns True if we can't stat the file (never skip on uncertainty)."""
+    if not cutoff:
+        return True
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(path)) >= cutoff
+    except OSError:
+        return True
+
+
 def _bump(agg, ip, source, category, dt, detail_item):
     """Accumulate one event into agg keyed by (ip, source, category, date)."""
     key = (ip, source, category, dt.date())
@@ -238,28 +253,42 @@ def parse_ssh_dt(token):
 
 
 def collect_ssh(agg, cutoff):
+    # btmp can be huge on a brute-forced host, so stream lastb's output line by
+    # line instead of buffering the whole dump (check_output + decode +
+    # splitlines would hold ~3 full copies in RAM at once).
     try:
-        raw = subprocess.check_output(
+        proc = subprocess.Popen(
             ["lastb", "-i", "-w", "--time-format", "iso"],
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
     except Exception as exc:
         log("WARN ssh/lastb failed: {0!r}".format(exc))
         return
-    for line in raw.decode("utf-8", "replace").splitlines():
-        line = line.strip()
-        if not line or line.startswith("btmp begins"):
-            continue
-        parts = line.split()
-        if len(parts) < 4:
-            continue
-        user, _term, host, tstamp = parts[0], parts[1], parts[2], parts[3]
-        if not is_public_ip(host):
-            continue
-        dt = parse_ssh_dt(tstamp)
-        if dt is None or (cutoff and dt < cutoff):
-            continue
-        _bump(agg, host, "ssh", "ssh_bruteforce", dt, user)
+    try:
+        for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", "replace").strip()
+            if not line or line.startswith("btmp begins"):
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            user, _term, host, tstamp = parts[0], parts[1], parts[2], parts[3]
+            dt = parse_ssh_dt(tstamp)
+            if dt is None:
+                continue
+            # lastb prints newest-first: once we pass the cutoff every remaining
+            # entry is older too, so stop reading the rest of btmp.
+            if cutoff and dt < cutoff:
+                break
+            if not is_public_ip(host):
+                continue
+            _bump(agg, host, "ssh", "ssh_bruteforce", dt, user)
+    finally:
+        try:
+            proc.stdout.close()    # SIGPIPE-terminates lastb if we broke early
+        except Exception:
+            pass
+        proc.wait()
 
 
 # ----------------------------- MySQL (error log) ---------------------------
@@ -285,6 +314,8 @@ def _parse_mysql_ts(line):
 def collect_mysql(agg, cutoff):
     paths = sorted(set(p for pat in MYSQL_LOG_GLOBS for p in glob.glob(pat)))
     for path in paths:
+        if not _file_maybe_in_window(path, cutoff):
+            continue  # rotated archive entirely older than the window
         op = gzip.open if path.endswith(".gz") else open
         try:
             fh = op(path, "rt", encoding="utf-8", errors="replace")
@@ -359,6 +390,8 @@ def caddy_log_paths():
 
 def collect_caddy(agg, cutoff):
     for path in caddy_log_paths():
+        if not _file_maybe_in_window(path, cutoff):
+            continue  # rotated archive entirely older than the window
         try:
             fh = _open_log(path)
         except Exception:
