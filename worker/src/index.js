@@ -164,6 +164,23 @@ function dashboardQuery(hasSource) {
     "LIMIT ? OFFSET ?";
 }
 
+// Window-wide totals for the dashboard cards — aggregated per IP across the WHOLE
+// window (no row limit), so 1d vs 30d differ correctly. HIGH uses the same score
+// formula as risk(). Independent of the LIMIT/OFFSET used for the map/table rows.
+function summaryQuery(hasSource) {
+  return "SELECT COUNT(*) AS unique_ips, " +
+    "COALESCE(SUM(att), 0) AS total_attempts, " +
+    "COALESCE(SUM((att + (nsrc - 1) * 200 + (reporters - 1) * 100) >= 200 OR nsrc >= 2), 0) AS high, " +
+    "COUNT(DISTINCT cc) AS countries " +
+    "FROM (SELECT b.ip AS ip, SUM(b.attempts) AS att, " +
+    "COUNT(DISTINCT b.source) AS nsrc, COUNT(DISTINCT b.reporter_ip) AS reporters, " +
+    "MAX(g.country_code) AS cc " +
+    "FROM bad_login b LEFT JOIN ip_geo g ON g.ip = b.ip " +
+    "WHERE b.log_date >= (CURDATE() - INTERVAL ? DAY) " +
+    (hasSource ? "AND b.source = ? " : "") +
+    "GROUP BY b.ip) t";
+}
+
 async function connect(env) {
   const c = await createConnection({
     host: env.HYPERDRIVE.host,
@@ -266,12 +283,17 @@ async function handle(request, env) {
   if (url.pathname === "/risk-ip") {
     const limit = clampInt(url.searchParams.get("limit"), MAP_MAX, 1, 5000);
     const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1000000000);
-    let conn, rows;
+    let conn, rows, stats = null;
     try {
       conn = await connect(env);
       const params = source ? [days, source, limit, offset] : [days, limit, offset];
       const [result] = await conn.query(dashboardQuery(!!source), params);
       rows = result;
+      if (format !== "csv") {  // window totals for the cards (CSV doesn't need them)
+        const sparams = source ? [days, source] : [days];
+        const [srows] = await conn.query(summaryQuery(!!source), sparams);
+        stats = srows && srows[0] ? srows[0] : null;
+      }
     } catch (err) {
       return dbError(err);
     } finally {
@@ -284,6 +306,12 @@ async function handle(request, env) {
     return jsonResponse({
       generated: new Date().toISOString(),
       days, source, count: rows.length, limit, offset,
+      stats: stats ? {
+        unique_ips: Number(stats.unique_ips),
+        total_attempts: Number(stats.total_attempts),
+        high: Number(stats.high),
+        countries: Number(stats.countries),
+      } : null,
       rows: rows.map(apiRow),
     });
   }
@@ -375,7 +403,7 @@ function shellPage(contact) {
     <span><i class="dot" style="background:#16a34a"></i>LOW</span>
   </div>
   <footer>
-    Map shows up to ${MAP_MAX} IPs · table paginates ${PAGE_SIZE} per page · geo from the ip_geo table.<br>
+    Cards show full-window totals; the map &amp; table show the top ${MAP_MAX} IPs by recent activity, ${PAGE_SIZE} per page.<br>
     To request removal of an IP from this list, contact <b>${esc(contact.name)}</b>
     &lt;<a href="mailto:${esc(contact.email)}?subject=IP%20removal%20request">${esc(contact.email)}</a>&gt;
     · <a href="/docs">API documentation</a>
@@ -418,12 +446,18 @@ function shellPage(contact) {
     document.getElementById('map').innerHTML='<div style="padding:20px;color:#94a3b8">could not load data</div>';
   }
 
-  function drawCards(rows){
-    var ips={},att=0,high=0;
-    rows.forEach(function(r){ips[r.ip]=1;att+=Number(r.attempts);if(r.risk==='HIGH')high++;});
-    document.getElementById('c-ips').textContent=intc(Object.keys(ips).length);
+  function drawCards(d){
+    var s=d.stats, ips, att, high, cc;
+    if(s){ ips=s.unique_ips; att=s.total_attempts; high=s.high; cc=s.countries; }
+    else { // fallback: derive from the (capped) rows if stats is absent
+      var set={},a=0,h=0,ccs={};
+      (d.rows||[]).forEach(function(r){set[r.ip]=1;a+=Number(r.attempts);if(r.risk==='HIGH')h++;if(r.country_code)ccs[r.country_code]=1;});
+      ips=Object.keys(set).length; att=a; high=h; cc=Object.keys(ccs).length;
+    }
+    document.getElementById('c-ips').textContent=intc(ips);
     document.getElementById('c-att').textContent=intc(att);
     document.getElementById('c-high').textContent=intc(high);
+    document.getElementById('c-cc').textContent=intc(cc);
   }
 
   function drawMapAndChips(rows){
@@ -443,7 +477,8 @@ function shellPage(contact) {
       }
     });
     var clist=ccOrder.map(function(k){return countries[k];}).sort(function(x,y){return y.attempts-x.attempts;});
-    document.getElementById('c-cc').textContent=intc(clist.length);
+    // (the Countries card is set from window-wide stats in drawCards; chips below
+    // are just the top countries within the plotted sample)
     document.getElementById('chips').innerHTML=clist.length?clist.slice(0,12).map(function(c){
       return '<span class="chip">'+flag(c.cc)+' '+esc(c.country||c.cc||'?')+' <b>'+intc(c.attempts)+'</b></span>';
     }).join(''):'<span class="chip" style="color:#94a3b8">no geolocated IPs</span>';
@@ -498,7 +533,7 @@ function shellPage(contact) {
     return resp.json();
   }).then(function(d){
     state.rows=d.rows||[];
-    drawCards(state.rows);
+    drawCards(d);
     drawMapAndChips(state.rows);
     drawTable();
   }).catch(function(e){fail('Failed to load data: '+e.message);});
@@ -562,6 +597,7 @@ function docsPage(contact) {
   <pre>{
   "generated": "2026-06-27T08:00:00.000Z",
   "days": 7, "source": null, "count": 500, "limit": 500, "offset": 0,
+  "stats": { "unique_ips": 2987, "total_attempts": 1840221, "high": 612, "countries": 71 },
   "rows": [
     {
       "log_date": "2026-06-27", "ip": "203.0.113.10",
@@ -572,6 +608,11 @@ function docsPage(contact) {
     }
   ]
 }</pre>
+  <p><code>stats</code> holds window-wide totals (computed across the whole window,
+  not just the returned rows): <code>unique_ips</code>, <code>total_attempts</code>,
+  <code>high</code> (count of HIGH-risk IPs), <code>countries</code>. The <code>rows</code>
+  array is the top <code>limit</code> by date then attempts. <code>stats</code> is
+  omitted for <code>format=csv</code>.</p>
   <p class="lead">Field names available to <code>fields=</code>:
   <code>${FIELD_ORDER.join("</code>, <code>")}</code>.</p>
 
