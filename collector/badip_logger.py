@@ -31,6 +31,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -156,9 +157,13 @@ ON DUPLICATE KEY UPDATE
   city=VALUES(city), lat=VALUES(lat), lon=VALUES(lon), isp=VALUES(isp), status=VALUES(status)
 """.format(db=DB_NAME)
 
-# ip-api.com batch endpoint: 100 IPs/request, ~45 requests/min on the free tier.
-GEO_API = ("http://ip-api.com/batch"
-           "?fields=status,country,countryCode,regionName,city,lat,lon,isp,query")
+# Local GeoIP City database (DB-IP legacy ".dat", IPv6 edition) read via pygeoip.
+# Auto-downloaded from GEOIP_URL on first use if GEOIP_DB is missing.
+GEOIP_DB = os.environ.get(
+    "GEOIP_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "dbip.dat"))
+GEOIP_URL = os.environ.get("GEOIP_URL",
+                           "https://dl.miyuru.lk/geoip/dbip/city/dbip.dat.gz")
 
 # Web "common probe" signatures, checked in order; first match wins.
 WEB_SIGNATURES = [
@@ -385,18 +390,89 @@ def collect_caddy(agg, cutoff):
 
 
 # ----------------------------- geo enrichment ------------------------------
-def geo_batch(ips):
-    """Geolocate up to 100 IPs via ip-api batch. Returns list of result dicts."""
-    body = json.dumps(ips).encode("utf-8")
-    req = urllib.request.Request(GEO_API, data=body,
-                                 headers={"Content-Type": "application/json"},
-                                 method="POST")
+_GEO = None
+_GEO_TRIED = False
+
+
+def _ensure_geo_db():
+    """Download + decompress the GeoIP .dat from GEOIP_URL if it's not present."""
+    if os.path.exists(GEOIP_DB) and os.path.getsize(GEOIP_DB) > 0:
+        return True
+    log("geo: db missing, downloading {0}".format(GEOIP_URL))
+    gz_tmp = GEOIP_DB + ".gz.tmp"
+    dat_tmp = GEOIP_DB + ".tmp"
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8", "replace"))
+        d = os.path.dirname(GEOIP_DB)
+        if d and not os.path.isdir(d):
+            os.makedirs(d)
+        # per-operation socket timeout (not a total deadline); generous so very
+        # slow / low-bandwidth links can still complete the ~50 MB download.
+        with urllib.request.urlopen(GEOIP_URL, timeout=600) as resp, open(gz_tmp, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        with gzip.open(gz_tmp, "rb") as gz, open(dat_tmp, "wb") as out:
+            shutil.copyfileobj(gz, out)
+        os.replace(dat_tmp, GEOIP_DB)
+        log("geo: downloaded {0} ({1:.1f} MB)".format(GEOIP_DB, os.path.getsize(GEOIP_DB) / 1048576.0))
+        return True
     except Exception as exc:
-        log("WARN geo_batch failed: {0!r}".format(exc))
-        return []
+        log("WARN geo db download failed: {0!r}".format(exc))
+        return False
+    finally:
+        for p in (gz_tmp, dat_tmp):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+
+
+def _geo_reader():
+    """Lazily open the local GeoIP .dat (pygeoip, mmap-backed). None if missing."""
+    global _GEO, _GEO_TRIED
+    if _GEO_TRIED:
+        return _GEO
+    _GEO_TRIED = True
+    if not _ensure_geo_db():
+        _GEO = None
+        return _GEO
+    try:
+        import pygeoip
+        _GEO = pygeoip.GeoIP(GEOIP_DB, pygeoip.const.MMAP_CACHE)
+    except Exception as exc:
+        log("WARN local GeoIP db unavailable ({0}): {1!r}".format(GEOIP_DB, exc))
+        _GEO = None
+    return _GEO
+
+
+def geo_batch(ips):
+    """Look up IPs in the local GeoIP City db; returns ip-api-shaped dicts.
+
+    The miyuru/geolite2legacy "city" .dat is an IPv6 edition that stores IPv4 as
+    IPv4-mapped addresses, so v4 must be queried as '::ffff:<ip>'."""
+    reader = _geo_reader()
+    out = []
+    if reader is None:
+        return out
+    for ip in ips:
+        try:
+            v = ipaddress.ip_address(ip)
+            rec = reader.record_by_addr(("::ffff:" + ip) if v.version == 4 else ip)
+        except Exception:
+            rec = None
+        if not rec:
+            continue  # not in db -> leave for a later run / db refresh
+        out.append({
+            "query": ip,
+            "status": "success",
+            "country": rec.get("country_name"),
+            "countryCode": rec.get("country_code"),
+            "regionName": rec.get("region_name") or rec.get("region_code"),
+            "city": rec.get("city"),
+            "lat": rec.get("latitude"),
+            "lon": rec.get("longitude"),
+            "isp": None,  # city db has no ISP/ASN
+        })
+    return out
 
 
 def enrich_geo(conn):
@@ -418,26 +494,15 @@ def enrich_geo(conn):
         log("geo: all IPs already located")
         return
 
-    upserted = 0
-    for i in range(0, len(todo), 100):
-        chunk = todo[i:i + 100]
-        results = geo_batch(chunk)
-        rows = []
-        for r in results:
-            q = r.get("query")
-            if not q:
-                continue
-            rows.append((q, r.get("country"), r.get("countryCode"),
-                         r.get("regionName"), r.get("city"),
-                         r.get("lat"), r.get("lon"), r.get("isp"), r.get("status")))
-        if rows:
-            with conn.cursor() as cur:
-                cur.executemany(GEO_UPSERT, rows)
-            conn.commit()
-            upserted += len(rows)
-        if i + 100 < len(todo):
-            time.sleep(1.5)  # be gentle with the free rate limit
-    log("geo: enriched {0}/{1} IPs".format(upserted, len(todo)))
+    rows = [(r["query"], r.get("country"), r.get("countryCode"),
+             r.get("regionName"), r.get("city"),
+             r.get("lat"), r.get("lon"), r.get("isp"), r.get("status"))
+            for r in geo_batch(todo)]
+    if rows:
+        with conn.cursor() as cur:
+            cur.executemany(GEO_UPSERT, rows)
+        conn.commit()
+    log("geo: located {0}/{1} new IPs (local db)".format(len(rows), len(todo)))
 
 
 # ----------------------------- main ----------------------------------------

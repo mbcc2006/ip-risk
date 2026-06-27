@@ -54,8 +54,10 @@ Configuration is read from the environment (or a `.env` file next to the script)
 | `BADIP_DB_USER` | `badip` | MySQL user |
 | `BADIP_DB_PASSWORD` | _(empty)_ | MySQL password |
 | `BADIP_DB_NAME` | `security` | database name |
-| `REPORTER_IP` | auto-detect | this host's identifying IP |
+| `REPORTER_IP` | auto-detect | this host's identifying IP (set explicitly on NAT'd hosts) |
 | `CADDYFILE` | `/etc/caddy/Caddyfile` | where to discover Caddy access-log paths |
+| `GEOIP_DB` | `dbip.dat` (next to script) | local GeoIP City `.dat` path |
+| `GEOIP_URL` | miyuru dbip city `.dat.gz` | URL to auto-download the GeoIP db from if missing |
 
 CLI:
 
@@ -144,8 +146,11 @@ value is bound — no string concatenation of user input into SQL.
 - Never commit `.env` / real credentials (see `.gitignore`).
 - Use a least-privilege MySQL user for the collector (INSERT/SELECT on the
   `security` DB), not a superuser.
-- Geolocation uses the free [ip-api.com](https://ip-api.com) batch endpoint
-  (non-commercial use); swap it out in the collector if you need commercial use.
+- Geolocation is done locally against a DB-IP City `.dat` (read with `pygeoip`),
+  auto-downloaded from `GEOIP_URL` on first use — no per-lookup API calls. The
+  default source is [db-ip.com](https://db-ip.com) lite via miyuru.lk (free,
+  non-commercial). Point `GEOIP_URL` at your own mirror/CDN for hosts that can't
+  reach it, and refresh the `.dat` periodically (the DB updates monthly).
 
 ## License
 
