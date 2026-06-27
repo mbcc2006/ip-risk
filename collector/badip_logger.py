@@ -264,7 +264,12 @@ def collect_ssh(agg, cutoff):
 
 # ----------------------------- MySQL (error log) ---------------------------
 # Requires log_error_verbosity >= 3 so "Access denied" notes are written.
-MYSQL_LOG_GLOB = "/var/log/mysqld.log*"
+# Colon-separated glob list (the error log lives in different places per distro:
+# /var/log/mysqld.log on EL/community, /var/log/mysql/mysqld.log on the module/
+# distro builds). Override with the MYSQL_LOG_GLOB env var.
+MYSQL_LOG_GLOBS = os.environ.get(
+    "MYSQL_LOG_GLOB",
+    "/var/log/mysqld.log*:/var/log/mysql/mysqld.log*:/var/log/mysql/error.log*").split(":")
 MYSQL_DENIED_RE = re.compile(r"Access denied for user '([^']*)'@'([^']*)'")
 # error-log timestamps are UTC ("...Z"); convert to local to match ssh/web.
 LOCAL_MINUS_UTC = datetime.now() - datetime.utcnow()
@@ -278,7 +283,8 @@ def _parse_mysql_ts(line):
 
 
 def collect_mysql(agg, cutoff):
-    for path in sorted(glob.glob(MYSQL_LOG_GLOB)):
+    paths = sorted(set(p for pat in MYSQL_LOG_GLOBS for p in glob.glob(pat)))
+    for path in paths:
         op = gzip.open if path.endswith(".gz") else open
         try:
             fh = op(path, "rt", encoding="utf-8", errors="replace")
