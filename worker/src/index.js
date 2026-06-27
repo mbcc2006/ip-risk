@@ -42,6 +42,8 @@ const PAGE_SIZE = 50;  // table rows per page (client-side pagination)
 // /risk-ip data API: default returns the whole window (one row per date+IP); for
 // windows larger than this, page through with limit + offset.
 const RISK_MAX_LIMIT = 20000;
+// /ip_only blocklist: default returns the full IP list (one call), capped here.
+const IPLIST_MAX_LIMIT = 50000;
 
 // Favicon for the HTML pages (served from R2).
 const FAVICON_URL = "https://r2.ivjn.us/favicon.ico";
@@ -187,6 +189,18 @@ function summaryQuery(hasSource) {
     "GROUP BY b.ip) t";
 }
 
+// Top countries by attempts across the WHOLE window (for the dashboard chips) —
+// not the 500-row sample, so the ranking/totals are accurate.
+function countriesQuery(hasSource) {
+  return "SELECT g.country_code AS country_code, MAX(g.country) AS country, " +
+    "SUM(b.attempts) AS attempts, COUNT(DISTINCT b.ip) AS ips " +
+    "FROM bad_login b JOIN ip_geo g ON g.ip = b.ip " +
+    "WHERE b.log_date >= (CURDATE() - INTERVAL ? DAY) " +
+    (hasSource ? "AND b.source = ? " : "") +
+    "AND g.country_code IS NOT NULL AND g.country_code <> '' " +
+    "GROUP BY g.country_code ORDER BY attempts DESC LIMIT 30";
+}
+
 async function connect(env) {
   const c = await createConnection({
     host: env.HYPERDRIVE.host,
@@ -266,7 +280,7 @@ async function handle(request, env) {
   }
 
   if (url.pathname === "/ip_only") {
-    const limit = clampInt(url.searchParams.get("limit"), 1000, 1, RISK_MAX_LIMIT);
+    const limit = clampInt(url.searchParams.get("limit"), IPLIST_MAX_LIMIT, 1, IPLIST_MAX_LIMIT);
     const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1000000000);
     let c;
     try {
@@ -289,16 +303,18 @@ async function handle(request, env) {
   if (url.pathname === "/risk-ip") {
     const limit = clampInt(url.searchParams.get("limit"), RISK_MAX_LIMIT, 1, RISK_MAX_LIMIT);
     const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1000000000);
-    let conn, rows, stats = null;
+    let conn, rows, stats = null, countries = [];
     try {
       conn = await connect(env);
       const params = source ? [days, source, limit, offset] : [days, limit, offset];
       const [result] = await conn.query(dashboardQuery(!!source), params);
       rows = result;
-      if (format !== "csv") {  // window totals for the cards (CSV doesn't need them)
+      if (format !== "csv") {  // window totals + top countries for the cards/chips
         const sparams = source ? [days, source] : [days];
         const [srows] = await conn.query(summaryQuery(!!source), sparams);
         stats = srows && srows[0] ? srows[0] : null;
+        const [crows] = await conn.query(countriesQuery(!!source), sparams);
+        countries = crows || [];
       }
     } catch (err) {
       return dbError(err);
@@ -318,6 +334,12 @@ async function handle(request, env) {
         high: Number(stats.high),
         countries: Number(stats.countries),
       } : null,
+      countries: countries.map((c) => ({
+        country_code: c.country_code,
+        country: c.country,
+        attempts: Number(c.attempts),
+        ips: Number(c.ips),
+      })),
       rows: rows.map(apiRow),
     });
   }
@@ -467,29 +489,30 @@ function shellPage(contact) {
     document.getElementById('c-cc').textContent=intc(cc);
   }
 
-  function drawMapAndChips(rows){
+  // Chips: top countries across the FULL window (from the server), not the sample.
+  function drawChips(countries){
+    var el=document.getElementById('chips');
+    if(!countries||!countries.length){el.innerHTML='<span class="chip" style="color:#94a3b8">no geolocated IPs</span>';return;}
+    el.innerHTML=countries.slice(0,12).map(function(c){
+      return '<span class="chip">'+flag(c.country_code)+' '+esc(c.country||c.country_code||'?')+' <b>'+intc(c.attempts)+'</b></span>';
+    }).join('');
+  }
+
+  // Map: plot the (up to MAP_MAX) IPs from the returned rows, coloured by risk.
+  function drawMap(rows){
     var agg={},order=[];
     rows.forEach(function(r){
       var a=agg[r.ip];
-      if(!a){a={ip:r.ip,attempts:0,nsrc:0,reporters:0,lat:r.lat,lon:r.lon,country:r.country,cc:r.country_code};agg[r.ip]=a;order.push(r.ip);}
+      if(!a){a={ip:r.ip,attempts:0,nsrc:0,reporters:0,lat:r.lat,lon:r.lon,country:r.country};agg[r.ip]=a;order.push(r.ip);}
       a.attempts+=Number(r.attempts);a.nsrc=Math.max(a.nsrc,Number(r.nsrc));a.reporters=Math.max(a.reporters,Number(r.reporters));
     });
-    var points=[],countries={},ccOrder=[];
+    var points=[];
     order.forEach(function(ip){
       var a=agg[ip];
       if(typeof a.lat==='number'&&a.lat!==null){
         points.push({lat:a.lat,lon:a.lon,ip:ip,attempts:a.attempts,country:a.country,color:riskColor(a.attempts,a.nsrc,a.reporters)});
-        var k=a.cc||'??';var cm=countries[k];if(!cm){cm={cc:a.cc,country:a.country,attempts:0};countries[k]=cm;ccOrder.push(k);}
-        cm.attempts+=a.attempts;
       }
     });
-    var clist=ccOrder.map(function(k){return countries[k];}).sort(function(x,y){return y.attempts-x.attempts;});
-    // (the Countries card is set from window-wide stats in drawCards; chips below
-    // are just the top countries within the plotted sample)
-    document.getElementById('chips').innerHTML=clist.length?clist.slice(0,12).map(function(c){
-      return '<span class="chip">'+flag(c.cc)+' '+esc(c.country||c.cc||'?')+' <b>'+intc(c.attempts)+'</b></span>';
-    }).join(''):'<span class="chip" style="color:#94a3b8">no geolocated IPs</span>';
-
     var el=document.getElementById('map');
     if(!window.L){el.innerHTML='<div style="padding:20px;color:#94a3b8">map library failed to load</div>';return;}
     if(!points.length){el.innerHTML='<div style="padding:20px;color:#94a3b8">No geolocated IPs in this window</div>';return;}
@@ -541,7 +564,8 @@ function shellPage(contact) {
   }).then(function(d){
     state.rows=d.rows||[];
     drawCards(d);
-    drawMapAndChips(state.rows);
+    drawChips(d.countries);
+    drawMap(state.rows);
     drawTable();
   }).catch(function(e){fail('Failed to load data: '+e.message);});
 })();
@@ -607,6 +631,7 @@ function docsPage(contact) {
   "generated": "2026-06-27T08:00:00.000Z",
   "days": 7, "source": null, "count": 4017, "limit": 20000, "offset": 0,
   "stats": { "unique_ips": 2585, "total_attempts": 426751, "high": 297, "countries": 89 },
+  "countries": [ { "country_code": "US", "country": "United States", "attempts": 151861, "ips": 497 } ],
   "rows": [
     {
       "log_date": "2026-06-27", "ip": "203.0.113.10",
@@ -619,9 +644,11 @@ function docsPage(contact) {
 }</pre>
   <p><code>stats</code> holds window-wide totals (computed across the whole window,
   not just the returned rows): <code>unique_ips</code>, <code>total_attempts</code>,
-  <code>high</code> (count of HIGH-risk IPs), <code>countries</code>. The <code>rows</code>
-  array is the top <code>limit</code> by date then attempts. <code>stats</code> is
-  omitted for <code>format=csv</code>.</p>
+  <code>high</code> (count of HIGH-risk IPs), <code>countries</code>. The <code>countries</code>
+  array lists the top countries by attempts across the window
+  (<code>country_code</code>, <code>country</code>, <code>attempts</code>, <code>ips</code>).
+  The <code>rows</code> array is the top <code>limit</code> by date then attempts.
+  <code>stats</code> and <code>countries</code> are omitted for <code>format=csv</code>.</p>
   <p class="lead">Field names available to <code>fields=</code>:
   <code>${FIELD_ORDER.join("</code>, <code>")}</code>.</p>
 
@@ -632,7 +659,7 @@ function docsPage(contact) {
     <thead><tr><th>param</th><th>type</th><th>default</th><th>meaning</th></tr></thead>
     <tbody>
       <tr><td><code>source</code></td><td>ssh \| mysql \| web</td><td><i>all</i></td><td>filter by source</td></tr>
-      <tr><td><code>limit</code></td><td>int 1–${RISK_MAX_LIMIT}</td><td>1000</td><td>page size</td></tr>
+      <tr><td><code>limit</code></td><td>int 1–${IPLIST_MAX_LIMIT}</td><td>${IPLIST_MAX_LIMIT} (full list)</td><td>page size</td></tr>
       <tr><td><code>offset</code></td><td>int ≥0</td><td>0</td><td>page offset</td></tr>
       <tr><td><code>format</code></td><td>json \| csv</td><td>json</td><td>JSON array, or one IP per line</td></tr>
     </tbody>
