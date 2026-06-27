@@ -103,7 +103,9 @@ stored in the Hyperdrive config on Cloudflare.
    …` or the dashboard). Put its id in `wrangler.toml`.
 2. Set your account id and (optionally) a custom domain — see comments in
    `wrangler.toml`.
-3. Deploy:
+3. Set the IP-removal contact shown on the dashboard/`/docs` — edit the
+   `CONTACT_NAME` / `CONTACT_EMAIL` vars in `wrangler.toml` (`[vars]`).
+4. Deploy:
    ```bash
    cd worker
    npm install

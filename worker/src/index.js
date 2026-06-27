@@ -25,9 +25,11 @@
 
 import { createConnection } from "mysql2/promise";
 
-// Contact for IP-removal requests (shown on the dashboard + docs).
-const CONTACT_NAME = "世界第一好吃";
-const CONTACT_EMAIL = "admin@ivjn.us";
+// Contact for IP-removal requests (shown on the dashboard + docs). Per-deployment
+// override via the CONTACT_NAME / CONTACT_EMAIL vars in wrangler.toml; these are
+// the fallbacks used when those vars aren't set.
+const DEFAULT_CONTACT_NAME = "世界第一好吃";
+const DEFAULT_CONTACT_EMAIL = "admin@ivjn.us";
 
 const ALLOWED_SOURCES = new Set(["ssh", "mysql", "web"]);
 const ALLOWED_FORMATS = new Set(["json", "csv"]);
@@ -207,8 +209,12 @@ async function handle(request, env) {
   }
 
   // Static HTML (no DB needed) — render even if the DB is down.
-  if (url.pathname === "/") return htmlResponse(shellPage());
-  if (url.pathname === "/docs") return htmlResponse(docsPage());
+  const contact = {
+    name: env.CONTACT_NAME || DEFAULT_CONTACT_NAME,
+    email: env.CONTACT_EMAIL || DEFAULT_CONTACT_EMAIL,
+  };
+  if (url.pathname === "/") return htmlResponse(shellPage(contact));
+  if (url.pathname === "/docs") return htmlResponse(docsPage(contact));
 
   // ---- data endpoints (need the DB) ----
   if (!env.HYPERDRIVE) return new Response("HYPERDRIVE binding is not configured", { status: 500 });
@@ -286,7 +292,7 @@ async function handle(request, env) {
 // ---------------------------------------------------------------------------
 // HTML: dashboard shell (data loaded client-side from /risk-ip)
 // ---------------------------------------------------------------------------
-function shellPage() {
+function shellPage(contact) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Daily IP Risk</title>
@@ -366,8 +372,8 @@ function shellPage() {
   </div>
   <footer>
     Map shows up to ${MAP_MAX} IPs · table paginates ${PAGE_SIZE} per page · geo from the ip_geo table.<br>
-    To request removal of an IP from this list, contact <b>${esc(CONTACT_NAME)}</b>
-    &lt;<a href="mailto:${esc(CONTACT_EMAIL)}?subject=IP%20removal%20request">${esc(CONTACT_EMAIL)}</a>&gt;
+    To request removal of an IP from this list, contact <b>${esc(contact.name)}</b>
+    &lt;<a href="mailto:${esc(contact.email)}?subject=IP%20removal%20request">${esc(contact.email)}</a>&gt;
     · <a href="/docs">API documentation</a>
   </footer>
 </div>
@@ -500,7 +506,7 @@ function shellPage() {
 // ---------------------------------------------------------------------------
 // HTML: API documentation
 // ---------------------------------------------------------------------------
-function docsPage() {
+function docsPage(contact) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>IP Risk — API documentation</title>
@@ -593,8 +599,8 @@ function docsPage() {
   <div class="contact">
     <h2 style="margin-top:0;border:0;padding:0">Request removal of an IP</h2>
     <p>If one of your addresses appears here in error and you'd like it removed,
-    email <b>${esc(CONTACT_NAME)}</b>
-    &lt;<a href="mailto:${esc(CONTACT_EMAIL)}?subject=IP%20removal%20request">${esc(CONTACT_EMAIL)}</a>&gt;
+    email <b>${esc(contact.name)}</b>
+    &lt;<a href="mailto:${esc(contact.email)}?subject=IP%20removal%20request">${esc(contact.email)}</a>&gt;
     with the IP address. Please send from an address you can prove control of.</p>
   </div>
 

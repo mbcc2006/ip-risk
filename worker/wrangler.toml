@@ -10,6 +10,12 @@ compatibility_flags = ["nodejs_compat"]
 # Worker. Leave commented to use the default <name>.<subdomain>.workers.dev URL.
 # routes = [{ pattern = "risk.yourdomain.com", custom_domain = true }]
 
+# Contact shown on the dashboard footer and /docs so people can request their IP
+# be removed from the feed. CHANGE THESE to your own name/email when deploying.
+[vars]
+CONTACT_NAME = "世界第一好吃"
+CONTACT_EMAIL = "admin@ivjn.us"
+
 [observability]
 enabled = true
 
