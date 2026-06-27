@@ -38,7 +38,7 @@ import sys
 import time
 import ipaddress
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pymysql
 
@@ -301,7 +301,8 @@ MYSQL_LOG_GLOBS = os.environ.get(
     "/var/log/mysqld.log*:/var/log/mysql/mysqld.log*:/var/log/mysql/error.log*").split(":")
 MYSQL_DENIED_RE = re.compile(r"Access denied for user '([^']*)'@'([^']*)'")
 # error-log timestamps are UTC ("...Z"); convert to local to match ssh/web.
-LOCAL_MINUS_UTC = datetime.now() - datetime.utcnow()
+# (now(tz).replace(tzinfo=None) gives naive UTC without the deprecated utcnow().)
+LOCAL_MINUS_UTC = datetime.now() - datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _parse_mysql_ts(line):
