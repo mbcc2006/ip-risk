@@ -338,6 +338,88 @@ def collect_mysql(agg, cutoff):
                 _bump(agg, host, "mysql", "mysql_bruteforce", dt, user or "?")
 
 
+# ----------------------------- PostgreSQL (container log) ------------------
+# Reads the postgres container's log (podman/docker) for port probes and failed
+# logins. The server must log the client host -- set, then reload:
+#   ALTER SYSTEM SET log_line_prefix = '%m [%p] %h ';
+#   ALTER SYSTEM SET log_connections = 'on';   SELECT pg_reload_conf();
+# postgres logs to its stderr (log_destination=stderr), which `docker/podman
+# logs` mirrors onto *its* stderr -- so we merge stderr into stdout below.
+# Timestamps are UTC (like the MySQL error log) -> +LOCAL_MINUS_UTC.
+PG_CONTAINER = os.environ.get("PG_CONTAINER", "postgres")
+PG_LOG_ENGINE = os.environ.get("PG_LOG_ENGINE", "docker")   # 'docker' == podman here
+PG_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
+PG_PREFIX_RE = re.compile(r"^\S+ \S+ \S+ \[\d+\] (\S*)")     # ...UTC [pid] <host>
+PG_RECV_RE = re.compile(r"connection received: host=(\S+)")
+PG_HBA_RE = re.compile(r'no pg_hba\.conf entry for host "([^"]+)"')
+PG_USER_RE = re.compile(r'for user "([^"]+)"')
+PG_ROLE_RE = re.compile(r'role "([^"]+)" does not exist')
+
+
+def _parse_pg_ts(line):
+    m = PG_TS_RE.match(line)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S") + LOCAL_MINUS_UTC
+    except ValueError:
+        return None
+
+
+def _pg_classify(line, prefix_host):
+    """(ip, category, detail) for a probe/failed-login line, else (None,...)."""
+    if "connection received" in line:           # someone opened a connection
+        m = PG_RECV_RE.search(line)
+        return (m.group(1) if m else prefix_host), "pg_probe", ""
+    if "password authentication failed" in line:
+        m = PG_USER_RE.search(line)
+        return prefix_host, "pg_bruteforce", (m.group(1) if m else "?")
+    if "no pg_hba.conf entry" in line:           # host rejected before auth
+        m = PG_HBA_RE.search(line)
+        return (m.group(1) if m else prefix_host), "pg_denied", ""
+    if "does not exist" in line and "role" in line:
+        m = PG_ROLE_RE.search(line)
+        return prefix_host, "pg_bruteforce", (m.group(1) if m else "?")
+    if "startup packet" in line:                 # incomplete/invalid startup -> scan
+        return prefix_host, "pg_probe", ""
+    return None, None, None
+
+
+def collect_postgres(agg, cutoff):
+    # Stream the container log (it can be large) instead of buffering it.
+    cmd = [PG_LOG_ENGINE, "logs"]
+    if cutoff:
+        hours = int((datetime.now() - cutoff).total_seconds() // 3600) + 1
+        cmd += ["--since", "{0}h".format(hours)]   # coarse; exact cutoff applied below
+    cmd.append(PG_CONTAINER)
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)   # postgres logs -> stderr
+    except Exception as exc:
+        log("WARN pg/{0} logs failed: {1!r}".format(PG_LOG_ENGINE, exc))
+        return
+    try:
+        for raw in proc.stdout:
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            if ("FATAL" not in line and "connection received" not in line
+                    and "startup packet" not in line):
+                continue
+            dt = _parse_pg_ts(line)
+            if dt is None or (cutoff and dt < cutoff):
+                continue
+            pm = PG_PREFIX_RE.match(line)
+            ip, category, detail = _pg_classify(line, pm.group(1) if pm else "")
+            if not ip or not is_public_ip(ip):   # drop local/unix-socket + non-public
+                continue
+            _bump(agg, ip, "pg", category, dt, detail)
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        proc.wait()
+
+
 # ----------------------------- Web (Caddy) ---------------------------------
 def classify_web(uri):
     for category, rx in WEB_SIGNATURES:
@@ -548,12 +630,14 @@ def enrich_geo(conn):
 # ----------------------------- main ----------------------------------------
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Collect malicious IPs (ssh/mysql/web) into MySQL.")
+        description="Collect malicious IPs (ssh/mysql/web/pg) into MySQL.")
     p.add_argument("--hours", type=float, default=None, metavar="N",
                    help="only consider events from the last N hours "
                         "(default: all). The daily cron uses 25.")
     p.add_argument("--sources", default="ssh,mysql,web",
-                   help="comma list of sources to collect (default: all).")
+                   help="comma list of sources to collect: ssh,mysql,web,pg "
+                        "(default: ssh,mysql,web; add 'pg' on hosts running the "
+                        "postgres container).")
     return p.parse_args()
 
 
@@ -582,6 +666,8 @@ def main():
             collect_mysql(agg, cutoff)
         if "web" in sources:
             collect_caddy(agg, cutoff)
+        if "pg" in sources:
+            collect_postgres(agg, cutoff)
 
         if agg:
             rows = []
