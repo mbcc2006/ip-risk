@@ -420,42 +420,6 @@ def collect_postgres(agg, cutoff):
         proc.wait()
 
 
-# ----------------------------- Honeypot (port probes) ----------------------
-# Reads the honeypot.py cache (one JSON hit per line: {ts, ip, port}; ts is a
-# local epoch). honeypot.py listens on a set of commonly-probed ports and
-# caches every public source IP that connects -- here we just upload them.
-HONEYPOT_CACHE = os.environ.get("HONEYPOT_CACHE", "/var/log/honeypot_hits.jsonl")
-
-
-def collect_honeypot(agg, cutoff):
-    for path in sorted(glob.glob(HONEYPOT_CACHE + "*")):
-        if not _file_maybe_in_window(path, cutoff):
-            continue  # rotated cache entirely older than the window
-        try:
-            fh = _open_log(path)
-        except Exception:
-            continue
-        with fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                ip, port, ts = rec.get("ip"), rec.get("port"), rec.get("ts")
-                if not ip or ts is None or not is_public_ip(ip):
-                    continue
-                try:
-                    dt = datetime.fromtimestamp(float(ts))
-                except (ValueError, OverflowError, OSError):
-                    continue
-                if cutoff and dt < cutoff:
-                    continue
-                _bump(agg, ip, "honeypot", "port_probe", dt, str(port))
-
-
 # ----------------------------- Web (Caddy) ---------------------------------
 def classify_web(uri):
     for category, rx in WEB_SIGNATURES:
@@ -666,14 +630,14 @@ def enrich_geo(conn):
 # ----------------------------- main ----------------------------------------
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Collect malicious IPs (ssh/mysql/web/pg/honeypot) into MySQL.")
+        description="Collect malicious IPs (ssh/mysql/web/pg) into MySQL.")
     p.add_argument("--hours", type=float, default=None, metavar="N",
                    help="only consider events from the last N hours "
                         "(default: all). The daily cron uses 25.")
     p.add_argument("--sources", default="ssh,mysql,web",
-                   help="comma list of sources to collect: ssh,mysql,web,pg,"
-                        "honeypot (default: ssh,mysql,web; add 'pg'/'honeypot' "
-                        "on hosts running the postgres container / honeypot.py).")
+                   help="comma list of sources to collect: ssh,mysql,web,pg "
+                        "(default: ssh,mysql,web; add 'pg' on hosts running the "
+                        "postgres container).")
     return p.parse_args()
 
 
@@ -704,8 +668,6 @@ def main():
             collect_caddy(agg, cutoff)
         if "pg" in sources:
             collect_postgres(agg, cutoff)
-        if "honeypot" in sources:
-            collect_honeypot(agg, cutoff)
 
         if agg:
             rows = []
